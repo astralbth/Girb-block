@@ -1,0 +1,145 @@
+import pygame
+import random
+
+# --- Ayarlar ---
+SCREEN_WIDTH = 500
+SCREEN_HEIGHT = 800
+GRID_SIZE = 8
+CELL_SIZE = 45
+GRID_OFFSET_X = (SCREEN_WIDTH - (GRID_SIZE * CELL_SIZE)) // 2
+GRID_OFFSET_Y = 120
+
+# Renkler
+BLACK = (12, 12, 18)
+GRAY = (35, 35, 45)
+WHITE = (245, 245, 245)
+YELLOW = (255, 215, 0)
+RED = (255, 50, 50)
+COLORS = [(0, 180, 255), (255, 100, 0), (160, 32, 240), (0, 255, 120), (255, 215, 0)]
+
+SHAPES = [
+    [(0, 0)], [(0, 0), (0, 1)], [(0, 0), (1, 0)],
+    [(0, 0), (0, 1), (0, 2)], [(0, 0), (1, 0), (2, 0)],
+    [(0, 0), (0, 1), (1, 0), (1, 1)], # Kare
+    [(0, 0), (0, 1), (0, 2), (1, 1)], # T
+    [(0, 0), (1, 0), (2, 0), (2, 1)], # L
+    [(0, 0), (0, 1), (0, 2), (0, 3)]  # 4'lü Çubuk
+]
+
+class Particle:
+    def __init__(self, x, y, color):
+        self.x, self.y = x, y
+        self.vx, self.vy = random.uniform(-5, 5), random.uniform(-5, 5)
+        self.lifetime = 255
+        self.color = color
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.lifetime -= 12
+
+    def draw(self, screen):
+        if self.lifetime > 0:
+            s = pygame.Surface((6, 6))
+            s.set_alpha(self.lifetime)
+            s.fill(self.color)
+            screen.blit(s, (self.x, self.y))
+
+class Piece:
+    def __init__(self, shape, pos_index):
+        self.shape = shape
+        self.color = random.choice(COLORS)
+        self.pos_index = pos_index
+        self.reset_pos()
+        self.is_dragging = False
+
+    def reset_pos(self):
+        self.x = 45 + self.pos_index * 155
+        self.y = 620
+        self.is_dragging = False
+
+class GridBreaker:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption("Grid Breaker: Combo Edition")
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont("Impact", 32)
+        self.big_font = pygame.font.SysFont("Impact", 70)
+        self.reset_game()
+
+    def reset_game(self):
+        self.grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
+        self.particles = []
+        self.pieces = [Piece(random.choice(SHAPES), i) for i in range(3)]
+        self.score = 0
+        self.game_over = False
+        self.combo_msg = ""
+        self.combo_timer = 0
+
+    def can_place(self, piece, start_r, start_c):
+        for dr, dc in piece.shape:
+            nr, nc = start_r + dr, start_c + dc
+            if not (0 <= nr < GRID_SIZE and 0 <= nc < GRID_SIZE and self.grid[nr][nc] is None):
+                return False
+        return True
+
+    def check_deadlock(self):
+        """Eldeki parçalardan herhangi biri masaya sığmıyorsa oyun biter."""
+        for p in self.pieces:
+            can_fit = False
+            for r in range(GRID_SIZE):
+                for c in range(GRID_SIZE):
+                    if self.can_place(p, r, c):
+                        can_fit = True
+                        break
+                if can_fit: break
+            if not can_fit: return True # Bir parça bile sığmıyorsa biter
+        return False
+
+    def check_lines(self):
+        rows = [r for r in range(GRID_SIZE) if all(self.grid[r])]
+        cols = [c for c in range(GRID_SIZE) if all(self.grid[r][c] for r in range(GRID_SIZE))]
+        
+        total_lines = len(rows) + len(cols)
+        if total_lines > 0:
+            # Kombo Puanı: 1 satır 100, 2 satır 300, 3 satır 600...
+            points = (total_lines * 100) * total_lines
+            self.score += points
+            if total_lines > 1:
+                self.combo_msg = f"COMBO x{total_lines}!"
+                self.combo_timer = 60 # 1 saniye ekranda kalır
+
+            # Patlama ve Temizleme
+            for r in rows:
+                for c in range(GRID_SIZE):
+                    self.explode(r, c, self.grid[r][c])
+                    self.grid[r][c] = None
+            for c in cols:
+                for r in range(GRID_SIZE):
+                    if self.grid[r][c]:
+                        self.explode(r, c, self.grid[r][c])
+                        self.grid[r][c] = None
+
+    def explode(self, r, c, color):
+        x = GRID_OFFSET_X + c * CELL_SIZE + CELL_SIZE//2
+        y = GRID_OFFSET_Y + r * CELL_SIZE + CELL_SIZE//2
+        for _ in range(12): self.particles.append(Particle(x, y, color))
+
+    def draw(self):
+        self.screen.fill(BLACK)
+        
+        # Skor ve Kombo Yazısı
+        score_txt = self.font.render(f"SCORE: {self.score}", True, WHITE)
+        self.screen.blit(score_txt, (SCREEN_WIDTH//2 - score_txt.get_width()//2, 30))
+        
+        if self.combo_timer > 0:
+            combo_txt = self.font.render(self.combo_msg, True, YELLOW)
+            self.screen.blit(combo_txt, (SCREEN_WIDTH//2 - combo_txt.get_width()//2, 75))
+            self.combo_timer -= 1
+
+        # Izgara Çizimi
+        for r in range(GRID_SIZE):
+            for c in range(GRID_SIZE):
+                rect = pygame.Rect(GRID_OFFSET_X + c*CELL_SIZE, GRID_OFFSET_Y + r*CELL_SIZE, CELL_SIZE-4, CELL_SIZE-4)
+                color = self.grid[r][c] if self.grid[r][c] else GRAY
