@@ -1,145 +1,307 @@
-import pygame
-import random
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Block Blast: Neon Arcade Edition</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    :root { 
+        --accent: #00ffcc; 
+        --bg: #000814; /* Neon teması için daha derin siyah */
+    }
+    body { 
+        margin: 0; 
+        background: var(--bg); 
+        color: white; 
+        font-family: 'Segoe UI', Arial; 
+        text-align: center; 
+        overflow: hidden; 
+        touch-action: none; 
+        transition: background 0.8s; 
+    }
+    #ui { 
+        padding: 15px; 
+        font-size: 18px; 
+        font-weight: bold; 
+        background: rgba(0,0,0,0.4); 
+        border-bottom: 2px solid var(--accent);
+    }
+    #score { font-size: 32px; color: var(--accent); display: block; text-shadow: 0 0 10px var(--accent); }
+    canvas { 
+        border: 4px solid var(--accent); 
+        border-radius: 10px; 
+        background: rgba(0,0,0,0.6); 
+        box-shadow: 0 0 20px rgba(0, 255, 204, 0.3);
+        margin-top: 10px;
+    }
+    #gameover { 
+        position: fixed; 
+        inset: 0; 
+        background: rgba(0,0,0,0.9); 
+        display: none; 
+        align-items: center; 
+        justify-content: center; 
+        flex-direction: column; 
+        z-index: 100; 
+        backdrop-filter: blur(10px); 
+    }
+    #gameover h2 { font-size: 40px; color: #ff4747; text-shadow: 0 0 15px #ff4747; }
+    #gameover button { 
+        padding: 15px 30px; 
+        font-size: 20px; 
+        border: none; 
+        border-radius: 50px; 
+        background: var(--accent); 
+        color: #000; 
+        font-weight: bold; 
+        cursor: pointer; 
+        box-shadow: 0 5px 20px var(--accent); 
+    }
+</style>
+</head>
+<body>
 
-# --- Ayarlar ---
-SCREEN_WIDTH = 500
-SCREEN_HEIGHT = 800
-GRID_SIZE = 8
-CELL_SIZE = 45
-GRID_OFFSET_X = (SCREEN_WIDTH - (GRID_SIZE * CELL_SIZE)) // 2
-GRID_OFFSET_Y = 120
+<div id="ui">
+    <span id="theme-tag" style="font-size: 12px; opacity: 0.8; color: var(--accent);">MOD: NEON ARCADE</span>
+    <span id="score">0</span>
+    <div style="font-size: 14px; opacity: 0.8;">Rekor: <span id="best">0</span> | Kombo: <span id="combo">0</span></div>
+</div>
 
-# Renkler
-BLACK = (12, 12, 18)
-GRAY = (35, 35, 45)
-WHITE = (245, 245, 245)
-YELLOW = (255, 215, 0)
-RED = (255, 50, 50)
-COLORS = [(0, 180, 255), (255, 100, 0), (160, 32, 240), (0, 255, 120), (255, 215, 0)]
+<canvas id="game" width="360" height="560"></canvas>
 
-SHAPES = [
-    [(0, 0)], [(0, 0), (0, 1)], [(0, 0), (1, 0)],
-    [(0, 0), (0, 1), (0, 2)], [(0, 0), (1, 0), (2, 0)],
-    [(0, 0), (0, 1), (1, 0), (1, 1)], # Kare
-    [(0, 0), (0, 1), (0, 2), (1, 1)], # T
-    [(0, 0), (1, 0), (2, 0), (2, 1)], # L
-    [(0, 0), (0, 1), (0, 2), (0, 3)]  # 4'lü Çubuk
-]
+<div id="gameover">
+    <h2>OYUN BİTTİ</h2>
+    <p style="font-size: 24px;">Skor: <span id="finalScore">0</span></p>
+    <button onclick="restart()">YENİDEN BAŞLA</button>
+</div>
 
-class Particle:
-    def __init__(self, x, y, color):
-        self.x, self.y = x, y
-        self.vx, self.vy = random.uniform(-5, 5), random.uniform(-5, 5)
-        self.lifetime = 255
-        self.color = color
+<script>
+/* ------------ SİSTEM VE TEMALAR ------------ */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    def update(self):
-        self.x += self.vx
-        self.y += self.vy
-        self.lifetime -= 12
+// İlk tema Neon Arcade olarak ayarlandı
+const themes = [
+    { bg: "#000814", board: "rgba(0, 255, 204, 0.15)", accent: "#00ffcc" },
+    ...Array.from({length: 24}, (_, i) => ({
+        bg: `hsl(${i * 137}, 30%, 8%)`,
+        board: `hsla(${i * 137}, 30%, 20%, 0.3)`,
+        accent: `hsl(${i * 137}, 100%, 70%)`
+    }))
+];
 
-    def draw(self, screen):
-        if self.lifetime > 0:
-            s = pygame.Surface((6, 6))
-            s.set_alpha(self.lifetime)
-            s.fill(self.color)
-            screen.blit(s, (self.x, self.y))
+// Daha canlı arcade renkleri
+const blockColors = ["#FF00FF", "#00FFFF", "#FFD700", "#FF4500", "#7FFF00", "#FF1493", "#1E90FF"];
+let themeIndex = 0;
+const c = document.getElementById("game"), ctx = c.getContext("2d");
+const SIZE = 45, COLS = 8, ROWS = 8, GRID_Y = 20, DOCK_Y = 400;
 
-class Piece:
-    def __init__(self, shape, pos_index):
-        self.shape = shape
-        self.color = random.choice(COLORS)
-        self.pos_index = pos_index
-        self.reset_pos()
-        self.is_dragging = False
+let board = Array.from({length: ROWS}, () => Array(COLS).fill(null));
+let score = 0, combo = 0, gameOver = false, particles = [];
+let best = localStorage.getItem("blockblast_best") || 0;
+document.getElementById("best").textContent = best;
 
-    def reset_pos(self):
-        self.x = 45 + self.pos_index * 155
-        self.y = 620
-        self.is_dragging = False
+/* ------------ ŞEKİLLER ------------ */
+const shapes = [
+    [[1,1,1,1]], 
+    [[1,1],[1,1]], 
+    [[1,1,1],[1,1,1],[1,1,1]], 
+    [[1,1,1],[0,1,0]], 
+    [[1,1,1],[1,0,0]], 
+    [[1,1,0],[0,1,1]], 
+    [[1]], [[1,1]], [[1,1,1]]
+];
 
-class GridBreaker:
-    def __init__(self):
-        pygame.init()
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Grid Breaker: Combo Edition")
-        self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("Impact", 32)
-        self.big_font = pygame.font.SysFont("Impact", 70)
-        self.reset_game()
+let blocks = [], drag = null, offX = 0, offY = 0;
 
-    def reset_game(self):
-        self.grid = [[None for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
-        self.particles = []
-        self.pieces = [Piece(random.choice(SHAPES), i) for i in range(3)]
-        self.score = 0
-        self.game_over = False
-        self.combo_msg = ""
-        self.combo_timer = 0
+/* ------------ FONKSİYONLAR ------------ */
+function playSound(f) {
+    try {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = "sine"; o.frequency.value = f; g.gain.value = 0.05;
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(); o.stop(audioCtx.currentTime + 0.1);
+    } catch(e) {}
+}
 
-    def can_place(self, piece, start_r, start_c):
-        for dr, dc in piece.shape:
-            nr, nc = start_r + dr, start_c + dc
-            if not (0 <= nr < GRID_SIZE and 0 <= nc < GRID_SIZE and self.grid[nr][nc] is None):
-                return False
-        return True
+function spawn() {
+    blocks = [];
+    for(let i=0; i<3; i++) {
+        let s = shapes[Math.floor(Math.random() * shapes.length)];
+        blocks.push({
+            shape: s,
+            color: blockColors[Math.floor(Math.random() * blockColors.length)],
+            x: 25 + i * 115, y: DOCK_Y + 20,
+            origX: 25 + i * 115, origY: DOCK_Y + 20,
+            scale: 0.6 
+        });
+    }
+}
 
-    def check_deadlock(self):
-        """Eldeki parçalardan herhangi biri masaya sığmıyorsa oyun biter."""
-        for p in self.pieces:
-            can_fit = False
-            for r in range(GRID_SIZE):
-                for c in range(GRID_SIZE):
-                    if self.can_place(p, r, c):
-                        can_fit = True
-                        break
-                if can_fit: break
-            if not can_fit: return True # Bir parça bile sığmıyorsa biter
-        return False
+function canPlace(b, gx, gy) {
+    for(let y=0; y<b.shape.length; y++)
+        for(let x=0; x<b.shape[y].length; x++)
+            if(b.shape[y][x]) {
+                let nx = gx + x, ny = gy + y;
+                if(nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || board[ny][nx]) return false;
+            }
+    return true;
+}
 
-    def check_lines(self):
-        rows = [r for r in range(GRID_SIZE) if all(self.grid[r])]
-        cols = [c for c in range(GRID_SIZE) if all(self.grid[r][c] for r in range(GRID_SIZE))]
+function clearLines() {
+    let toClearR = [], toClearC = [];
+    for(let i=0; i<8; i++) {
+        if(board[i].every(v => v)) toClearR.push(i);
+        if(board.every(row => row[i])) toClearC.push(i);
+    }
+
+    if(toClearR.length || toClearC.length) {
+        combo++;
+        let lines = toClearR.length + toClearC.length;
+        toClearR.forEach(r => { 
+            for(let x=0; x<8; x++) { createParticles(x*SIZE+20, r*SIZE+GRID_Y+20, board[r][x].color); board[r][x]=null; }
+        });
+        toClearC.forEach(c => {
+            for(let y=0; y<8; y++) { if(board[y][c]) { createParticles(c*SIZE+20, y*SIZE+GRID_Y+20, board[y][c].color); board[y][c]=null; } }
+        });
+        score += lines * 150 * combo; // Satır silme puanı
+        playSound(500 + combo * 100);
         
-        total_lines = len(rows) + len(cols)
-        if total_lines > 0:
-            # Kombo Puanı: 1 satır 100, 2 satır 300, 3 satır 600...
-            points = (total_lines * 100) * total_lines
-            self.score += points
-            if total_lines > 1:
-                self.combo_msg = f"COMBO x{total_lines}!"
-                self.combo_timer = 60 # 1 saniye ekranda kalır
+        if(score >= (themeIndex + 1) * 3000) {
+            themeIndex = (themeIndex + 1) % 25;
+            document.getElementById("theme-tag").textContent = themeIndex === 0 ? "MOD: NEON ARCADE" : `TEMA ${themeIndex + 1} / 25`;
+        }
+    } else { combo = 0; }
+}
 
-            # Patlama ve Temizleme
-            for r in rows:
-                for c in range(GRID_SIZE):
-                    self.explode(r, c, self.grid[r][c])
-                    self.grid[r][c] = None
-            for c in cols:
-                for r in range(GRID_SIZE):
-                    if self.grid[r][c]:
-                        self.explode(r, c, self.grid[r][c])
-                        self.grid[r][c] = None
+function createParticles(x, y, color) {
+    for(let i=0; i<8; i++) particles.push({ x, y, vx: (Math.random()-0.5)*12, vy: (Math.random()-0.5)*12, a: 1, color });
+}
 
-    def explode(self, r, c, color):
-        x = GRID_OFFSET_X + c * CELL_SIZE + CELL_SIZE//2
-        y = GRID_OFFSET_Y + r * CELL_SIZE + CELL_SIZE//2
-        for _ in range(12): self.particles.append(Particle(x, y, color))
+function draw() {
+    document.body.style.background = themes[themeIndex].bg;
+    document.documentElement.style.setProperty('--accent', themes[themeIndex].accent);
+    ctx.clearRect(0,0,c.width,c.height);
 
-    def draw(self):
-        self.screen.fill(BLACK)
+    ctx.fillStyle = themes[themeIndex].board;
+    for(let y=0; y<ROWS; y++)
+        for(let x=0; x<COLS; x++)
+            ctx.fillRect(x*SIZE, GRID_Y+y*SIZE, SIZE-2, SIZE-2);
+
+    for(let y=0; y<ROWS; y++)
+        for(let x=0; x<COLS; x++)
+            if(board[y][x]) {
+                ctx.fillStyle = board[y][x].color;
+                ctx.shadowBlur = 10; ctx.shadowColor = board[y][x].color;
+                ctx.fillRect(x*SIZE, GRID_Y+y*SIZE, SIZE-2, SIZE-2);
+                ctx.shadowBlur = 0;
+            }
+
+    if(drag) {
+        let gx = Math.round(drag.x / SIZE), gy = Math.round((drag.y - GRID_Y) / SIZE);
+        ctx.fillStyle = canPlace(drag, gx, gy) ? "rgba(255,255,255,0.3)" : "rgba(255,0,0,0.3)";
+        for(let y=0; y<drag.shape.length; y++)
+            for(let x=0; x<drag.shape[y].length; x++)
+                if(drag.shape[y][x]) ctx.fillRect((gx+x)*SIZE, GRID_Y+(gy+y)*SIZE, SIZE-2, SIZE-2);
+    }
+
+    ctx.fillStyle = "rgba(255,255,255,0.03)";
+    ctx.fillRect(10, DOCK_Y, c.width-20, 140);
+    
+    blocks.forEach(b => {
+        ctx.fillStyle = b.color;
+        let s = b === drag ? 1 : 0.6;
+        ctx.shadowBlur = b === drag ? 15 : 0; ctx.shadowColor = b.color;
+        for(let y=0; y<b.shape.length; y++)
+            for(let x=0; x<b.shape[y].length; x++)
+                if(b.shape[y][x]) ctx.fillRect(b.x + x*SIZE*s, b.y + y*SIZE*s, SIZE*s-2, SIZE*s-2);
+        ctx.shadowBlur = 0;
+    });
+
+    particles.forEach((p, i) => {
+        p.x += p.vx; p.y += p.vy; p.a -= 0.02;
+        ctx.fillStyle = p.color; ctx.globalAlpha = p.a;
+        ctx.fillRect(p.x, p.y, 4, 4);
+        if(p.a <= 0) particles.splice(i, 1);
+    });
+    ctx.globalAlpha = 1;
+
+    document.getElementById("score").textContent = score;
+    document.getElementById("combo").textContent = combo;
+    if(score > best) { best = score; localStorage.setItem("blockblast_best", best); document.getElementById("best").textContent = best; }
+
+    if(!gameOver && blocks.length > 0 && checkGameOver()) {
+        gameOver = true;
+        document.getElementById("finalScore").textContent = score;
+        document.getElementById("gameover").style.display = "flex";
+    }
+    requestAnimationFrame(draw);
+}
+
+function checkGameOver() {
+    return blocks.every(b => {
+        for(let y=0; y<ROWS; y++)
+            for(let x=0; x<COLS; x++)
+                if(canPlace(b, x, y)) return false;
+        return true;
+    });
+}
+
+/* ------------ GİRDİLER VE PUANLAMA ------------ */
+c.addEventListener("pointerdown", e => {
+    if(gameOver) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    let r = c.getBoundingClientRect(), mx = e.clientX-r.left, my = e.clientY-r.top;
+    blocks.forEach(b => {
+        let sz = SIZE * 0.6;
+        if(mx > b.x && mx < b.x + 4*sz && my > b.y && my < b.y + 4*sz) {
+            drag = b; offX = mx - b.x; offY = my - b.y;
+            playSound(300);
+        }
+    });
+});
+
+window.addEventListener("pointermove", e => {
+    if(!drag) return;
+    let r = c.getBoundingClientRect();
+    drag.x = e.clientX - r.left - offX;
+    drag.y = e.clientY - r.top - offY;
+});
+
+window.addEventListener("pointerup", () => {
+    if(!drag) return;
+    let gx = Math.round(drag.x / SIZE), gy = Math.round((drag.y - GRID_Y) / SIZE);
+    if(canPlace(drag, gx, gy)) {
+        let blockCount = 0;
+        for(let y=0; y<drag.shape.length; y++) {
+            for(let x=0; x<drag.shape[y].length; x++) {
+                if(drag.shape[y][x]) {
+                    board[gy+y][gx+x] = {color: drag.color};
+                    blockCount++;
+                }
+            }
+        }
         
-        # Skor ve Kombo Yazısı
-        score_txt = self.font.render(f"SCORE: {self.score}", True, WHITE)
-        self.screen.blit(score_txt, (SCREEN_WIDTH//2 - score_txt.get_width()//2, 30))
+        // YENİ: Blok yerleştirme puanı (Her kare için 10 puan)
+        score += blockCount * 10;
         
-        if self.combo_timer > 0:
-            combo_txt = self.font.render(self.combo_msg, True, YELLOW)
-            self.screen.blit(combo_txt, (SCREEN_WIDTH//2 - combo_txt.get_width()//2, 75))
-            self.combo_timer -= 1
+        blocks = blocks.filter(b => b !== drag);
+        playSound(400);
+        clearLines();
+        if(blocks.length === 0) spawn();
+    } else {
+        drag.x = drag.origX; drag.y = drag.origY;
+    }
+    drag = null;
+});
 
-        # Izgara Çizimi
-        for r in range(GRID_SIZE):
-            for c in range(GRID_SIZE):
-                rect = pygame.Rect(GRID_OFFSET_X + c*CELL_SIZE, GRID_OFFSET_Y + r*CELL_SIZE, CELL_SIZE-4, CELL_SIZE-4)
-                color = self.grid[r][c] if self.grid[r][c] else GRAY
+function restart() {
+    board = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+    score=combo=0; themeIndex=0; gameOver=false;
+    spawn();
+    document.getElementById("gameover").style.display="none";
+}
+
+spawn(); draw();
+</script>
+</body>
+</html>
